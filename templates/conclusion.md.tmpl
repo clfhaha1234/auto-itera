@@ -19,6 +19,8 @@
 - Primary: {{metric}}.
 - Ship-rule: {{threshold_rule}}.
 - Judge rubric locked at {{rubric_locked_date}}; cross-judge sanity check on {{n_cross_judge_rows}} dev rows by {{cross_judge_model}}.
+- Failure-mode taxonomy (locked with rubric): `{{failure_mode_1}}`, `{{failure_mode_2}}`, `{{failure_mode_3}}`, ... — each row labeled by the judge with which (one or more) it falls under. New categories surfaced mid-experiment are deferred to "what to test next".
+- Severity weighting: `{{severity_field}}` (e.g. `abs(amount_usd)` capped at $50k). Both unweighted and severity-weighted aggregates reported below. **OMIT this bullet if rows are roughly equal-impact.**
 
 ## Phase 3 — dev-set scores
 
@@ -41,9 +43,28 @@ If iter 3 falsified the iter 1 hypothesis, state explicitly: **iter 3 is the loc
 | `{{arm.id}}` | {{delta}}pp | [{{ci_low}}, {{ci_high}}] | {{slice1_delta}}pp | {{slice2_delta}}pp | ship / kill |
 | ... | ... | ... | ... | ... | ... |
 
+### Failure-mode delta (per category — aggregate counts on held-out test set)
+
+| Arm | `{{failure_mode_1}}` | `{{failure_mode_2}}` | `{{failure_mode_3}}` | Total |
+|---|---|---|---|---|
+| `{{baseline.id}}` | n | n | n | n |
+| `{{arm.id}}`      | n (Δ vs base) | n (Δ vs base) | n (Δ vs base) | n |
+| ... | ... | ... | ... | ... |
+
+One sentence: if an arm ties on aggregate but shifts errors INTO a higher-severity category, that arm is strictly worse — call it out explicitly here.
+
+### Severity-weighted aggregate (OMIT this subsection if no severity weighting was registered)
+
+| Arm | Unweighted accuracy | Severity-weighted accuracy | Disagreement? |
+|---|---|---|---|
+| `{{baseline.id}}` | 0.xxx | 0.xxx | — |
+| `{{arm.id}}`      | 0.xxx | 0.xxx | yes / no |
+
+If the two rankings disagree: state the resolution under the pre-registered rule (ship the severity-weighted winner only if its unweighted score also clears threshold; else kill or scope narrowly).
+
 **Verdict: ship `{{winner}}`** (and/or **kill `{{killed_arms}}`**).
 
-One paragraph explaining the verdict, **always referencing the pre-registered rule from Phase 0**, not a freshly-invented heuristic. If an arm passed aggregate but failed per-slice, call that out explicitly with the failing slice's CI bounds.
+One paragraph explaining the verdict, **always referencing the pre-registered rule from Phase 0**, not a freshly-invented heuristic. If an arm passed aggregate but failed per-slice, per-category, or per-severity-bucket, call that out explicitly with the failing slice's CI bounds.
 
 ## Cost view
 
@@ -72,6 +93,8 @@ One sentence. This must NOT be "let me re-run with more iterations." It should b
 - [ ] 3-iteration cap enforced
 - [ ] Verdict locks LATEST hypothesis-driven iter, not best-scoring iter
 - [ ] Per-slice scores reported; aggregate winners hold on all major slices, OR ship is scoped narrowly
+- [ ] Failure-mode categories pre-registered in Phase 2; per-category delta reported above
+- [ ] If severity weighting used: both unweighted + weighted aggregates reported; disagreements surfaced in verdict
 
 ---
 

@@ -4,7 +4,7 @@
     "question": "Does a cross-source prompt outperform the baseline classifier on a B2B SaaS transaction-categorization task?",
     "metric": "Classification accuracy vs human-labeled ground truth (judge: Claude Sonnet 4.6)",
     "threshold_pct": 5.0,
-    "threshold_rule": "Aggregate effect >= +5pp AND no per-slice loss > 2pp (CI lower bound)",
+    "threshold_rule": "Aggregate effect >= +5pp AND no per-slice loss > 2pp (CI lower bound) AND no per-failure-mode regression in the highest-severity category (transfer_as_revenue)",
     "test_set_n": 60,
     "trials_per_arm": 3
   },
@@ -17,6 +17,28 @@
     {"id": "enterprise", "name": "Enterprise tenants (n=30)"},
     {"id": "smb",        "name": "SMB tenants (n=30)"}
   ],
+  "failure_modes": {
+    "registered_at_phase_2": "2026-04-12",
+    "categories": [
+      {"id": "wrong_code",           "name": "Wrong GL account code",                     "severity_weight": 1.0},
+      {"id": "wrong_sign",           "name": "Wrong amount direction (debit vs credit)",  "severity_weight": 2.0},
+      {"id": "transfer_as_revenue",  "name": "Internal transfer classified as revenue",   "severity_weight": 3.0}
+    ],
+    "test_set_counts": {
+      "baseline": {"wrong_code": 14, "wrong_sign": 5, "transfer_as_revenue": 4},
+      "v2":       {"wrong_code": 12, "wrong_sign": 4, "transfer_as_revenue": 2},
+      "v3":       {"wrong_code":  8, "wrong_sign": 4, "transfer_as_revenue": 6}
+    }
+  },
+  "severity": {
+    "field": "abs(transaction_amount_usd) capped at $50k",
+    "registered_at_phase_2": "2026-04-12",
+    "test_set_weighted_accuracy": {
+      "baseline": 0.581,
+      "v2":       0.724,
+      "v3":       0.572
+    }
+  },
   "variance_trials": {
     "baseline": [0.600, 0.617, 0.633],
     "v2":       [0.700, 0.717, 0.700],
@@ -51,6 +73,6 @@
   "verdict": {
     "winner": "v2",
     "killed": ["v3"],
-    "rationale": "v2 passes the aggregate threshold (+8.9pp, CI lower bound +5.0pp == registered threshold) AND both per-slice rules (Enterprise +13.4pp, SMB +6.7pp; both CI lower bounds positive). v3 also passes aggregate but FAILS the per-slice rule on SMB (-3.3pp, CI [-8.8pp, +2.2pp] crosses both zero and the -2pp loss floor). Aggregate winners are not winners when a major slice regresses. Ship v2; kill v3."
+    "rationale": "v2 passes all three pre-registered rules: (a) aggregate effect +8.9pp, CI lower bound +5.0pp == threshold; (b) per-slice — Enterprise +13.4pp, SMB +6.7pp, both CI lower bounds positive; (c) per-failure-mode — `transfer_as_revenue` drops from 4 to 2, and severity-weighted accuracy rises from 0.581 to 0.724. v3 ties v2 on aggregate (+8.9pp) but FAILS two of three rules: SMB per-slice -3.3pp with CI [-8.8pp, +2.2pp] crossing the -2pp loss floor, AND `transfer_as_revenue` failures rise from 4 to 6 (the highest-severity category, weight 3.0). The severity-weighted score confirms it: v3 = 0.572 is BELOW baseline 0.581 despite tying v2 on unweighted aggregate. Aggregate winners that lose on a major slice or shift errors into the highest-severity category are not winners. Ship v2; kill v3."
   }
 }

@@ -19,7 +19,9 @@
 ## Metric + threshold (pre-registered Phase 2)
 
 - Primary: classification accuracy vs human-labeled ground truth (judge: Claude Sonnet 4.6, rubric locked).
-- Ship-rule: aggregate effect >= **+5pp** AND no per-slice CI lower bound below **-2pp**.
+- Ship-rule: ALL of (a) aggregate effect >= **+5pp**, (b) no per-slice CI lower bound below **-2pp**, (c) no regression on the highest-severity failure category `transfer_as_revenue`.
+- Failure-mode categories (locked with rubric): `wrong_code` (weight 1.0), `wrong_sign` (2.0), `transfer_as_revenue` (3.0). Each failed row tagged by the judge with one or more.
+- Severity weighting: `abs(transaction_amount_usd)` capped at $50k. Both unweighted and severity-weighted aggregates reported below.
 
 ## Phase 3 — dev-set scores
 
@@ -40,9 +42,29 @@ Per-row diff inspection on dev surfaced one signal worth flagging into Phase 0 o
 | `prompt-v2` | **+8.9pp** | [+5.0, +12.8] | +13.4pp | +6.7pp | **ship** ✓ |
 | `prompt-v3` | +8.9pp | [+5.0, +12.8] | +20.0pp | **-3.3pp** | **kill** ✗ |
 
+### Failure-mode delta (per category — count of mis-tagged rows on N=60 test set)
+
+| Arm | `wrong_code` (w=1.0) | `wrong_sign` (w=2.0) | `transfer_as_revenue` (w=3.0) | Total |
+|---|---|---|---|---|
+| `prompt-v1` (baseline) | 14 | 5 | 4 | 23 |
+| `prompt-v2`            | 12 (Δ -2) | 4 (Δ -1) | **2 (Δ -2)** ✓ | 18 |
+| `prompt-v3`            |  8 (Δ -6) | 4 (Δ -1) | **6 (Δ +2)** ✗ | 18 |
+
+`v2` and `v3` tie on aggregate failure count (18 vs 18), but the **distribution is qualitatively different**: `v3` trades 6 fewer `wrong_code` errors (weight 1.0) for 2 MORE `transfer_as_revenue` errors (weight 3.0) — the highest-severity category. By the per-failure-mode rule pre-registered in Phase 0, this is a regression dressed as a tie.
+
+### Severity-weighted aggregate
+
+| Arm | Unweighted accuracy | Severity-weighted accuracy | Disagreement? |
+|---|---|---|---|
+| `prompt-v1` (baseline) | 0.617 | 0.581 | — |
+| `prompt-v2`            | **0.706** | **0.724** | no — v2 wins both |
+| `prompt-v3`            | 0.706 | **0.572** | **yes — v3 ties v2 unweighted but is BELOW BASELINE weighted** |
+
+The two rankings disagree on `v3`. Under the pre-registered tie-break (severity-weighted winner ships only if unweighted score also clears threshold; otherwise kill), `v3` is killed regardless of its per-slice result — the severity-weighted score is a fail on its own.
+
 **Verdict: ship `prompt-v2`, kill `prompt-v3`.**
 
-`v2` passes the aggregate threshold (CI lower bound lands exactly on the registered +5pp floor) AND both per-slice rules (both CI lower bounds positive). `v3` passes aggregate just as cleanly, but its SMB slice CI is `[-8.8pp, +2.2pp]` — crosses zero, crosses the -2pp loss floor. **Aggregate winners are not winners when a major slice regresses.** Without the per-slice rule pre-registered in Phase 0, we would have shipped `v3` and quietly hurt every SMB customer.
+`v2` passes all three pre-registered rules cleanly: aggregate +8.9pp (CI lower bound lands exactly on the registered +5pp floor); per-slice — both CIs positive; per-failure-mode — `transfer_as_revenue` drops 4→2 and severity-weighted accuracy rises 0.581→0.724. `v3` passes aggregate just as cleanly, but fails TWO of the three rules: SMB slice CI `[-8.8pp, +2.2pp]` crosses both zero and the -2pp loss floor; `transfer_as_revenue` rises 4→6 in the highest-severity category, and severity-weighted accuracy at 0.572 is BELOW baseline 0.581. **Aggregate winners are not winners when a major slice regresses or when the failure mix shifts into the highest-severity category.** Without the per-slice + per-failure-mode + severity-weighted rules pre-registered in Phase 0, we would have shipped `v3` and quietly hurt every SMB customer AND inflated the top-line P&L on every founder dashboard.
 
 ## Cost view
 
@@ -71,3 +93,5 @@ Investigate whether amount-direction hints can be made **slice-conditional** (ap
 - [x] Single sprint sufficed (dev signal saturated; second sprint would have been metric-chasing)
 - [x] Verdict locks LATEST gate-passed hypothesis-driven iter (`prompt-v3` was locked for test even though its dev score wasn't higher than `prompt-v2`'s)
 - [x] Per-slice scores reported; aggregate winner `v3` overturned by per-slice rule
+- [x] Failure-mode categories pre-registered in Phase 2; per-category delta surfaced `v3`'s severity-3.0 regression
+- [x] Severity-weighted aggregate reported alongside unweighted; the two rankings disagreed on `v3`, resolved per pre-registered tie-break

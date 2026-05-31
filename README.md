@@ -123,6 +123,8 @@ Several solid tools exist for *running* evals — [Promptfoo](https://promptfoo.
 | **Held-out test sealed + metric pre-registered** by default | "saw the score, edited the metric, re-ran" is structurally forbidden, not just discouraged |
 | **Sprint + generalization gate** between iteration rounds | strips dev-set memorization before each new sprint; iter-3 hardcodes get rejected before they reach the test set |
 | **Per-slice loss floor** | aggregate winner that regresses a major tenant slice is rejected automatically — no aggregate-winner-ships-and-quietly-breaks-SMB story |
+| **Pre-registered failure-mode taxonomy** | 3–5 `eval_finding` categories locked alongside the rubric; two arms tying on aggregate while one shifts errors INTO the highest-severity category is rejected as a regression-dressed-as-a-tie |
+| **Optional severity weighting** | when row impact varies by >5× (a $50K wire vs a $5 coffee), both unweighted and severity-weighted aggregates are reported; ship-rule applies the pre-registered tie-break when rankings disagree |
 | **One-shot test pass** | the sealed test set opens ONCE; conclusion doc + 3 charts + discipline self-audit is the output |
 | **Runs inside Claude Code** | no separate CLI / dashboard to maintain; `git clone` and ask a question |
 
