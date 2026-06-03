@@ -38,7 +38,7 @@ flowchart LR
 ## When NOT to Use
 
 - Decision can be made from first-principles reasoning alone (e.g., "this code path is wrong because it ignores `resetAt`") — just fix it
-- No real production data available (synthetic-only experiments are weaker than thoughtful design)
+- No real production data available **and** no known-ground-truth source to synthesize from. (Note: synthetic data *generated from a known source of truth* — a product catalog, labeled DB, or spec — is a **strong** option, not a weak one; it buys exact labels + deterministic scoring. See Phase 1. Only *vibes-synthetic* with made-up labels is weaker than thoughtful design.)
 - The arms are mechanically the same (e.g., "v1.0 prompt vs v1.0 prompt with whitespace edits") — you have nothing to test
 
 ## The Six Phases
@@ -57,9 +57,13 @@ Write down, on paper:
 
 **Lock these before collecting data.** Decisions made AFTER seeing scores are how p-hacking happens.
 
+**For "is it the model or the logic?" questions, include a negative-control arm.** Swap ONLY the model (e.g. Haiku→Sonnet) as a control whose *expected* result is "no change." If the bigger/stronger model doesn't move the failing slice, you've **proven the lever is context/logic, not capability** — and saved yourself from shipping a 3–6× cost increase that fixes nothing. A control arm you expect to *fail* is as informative as the treatment arm you expect to win; it's how you attribute the cause rather than just chase a number.
+
 ### Phase 1 — Source data + split
 
 **Source from production whenever possible.** Real customer rows + real prod state. Synthetic data underestimates the long tail.
+
+**Synthetic-with-known-ground-truth — a strong third option, not a fallback.** When you can *generate* the eval inputs from a known source of truth (a catalog, a labeled table, a spec), the label of every row is exact **by construction**. That buys you **deterministic scoring with no LLM judge** — which deletes the entire judge-bias / rubric-drift / cross-judge-check surface from Phase 2. It still underestimates the real tail (caveat the conclusion), but for "did it recover the right X" questions it is often the *cleanest* possible experiment. The price you pay: **the generator becomes a label-noise source.** A generator bug — duplicate filenames that overwrite each other, an off-by-one in the label map, noise so heavy a row is genuinely unidentifiable — silently corrupts ground truth and your "model failures" are actually stale labels. **Run a label-noise audit before trusting any score:** for every row the baseline gets "wrong", confirm the label and the on-disk artifact actually match. (In a real run this caught a filename-collision bug that had turned 2 of 3 apparent model failures into label artifacts — it would have poisoned the verdict.)
 
 | Set | Size | Purpose | Examined? |
 |---|---|---|---|
@@ -88,6 +92,8 @@ For small N (<50 rows total): use stratified k-fold on dev instead of a fixed sp
 - "BTC has 2× the rows of Sodagift but Sodagift has 100× more prod traffic" → re-stratify
 - The system you're testing operates on prod's distribution, not the sampler's. **Mismatch here = experiment tests the wrong thing**, no amount of careful Phase 4 fixes that.
 
+**Stratify the SPLIT by failure mode, not just the sample — or the test set goes blind.** If failures concentrate in a *rare* slice (one doc type, one vendor, one edge condition), a random train/dev/test split can sweep all of those rows into train+dev and leave the **test set with none of them**. Then baseline and arm both score ~100% on test, the effect is +0pp, and you conclude "no win" — when the truth is the test had **zero power** to see the thing you were testing. Decide stratification in Phase 1: each split, *especially test*, must contain the failure-mode rows the experiment is about. Discovering this in Phase 5 is unrecoverable for that run (you can't reseal test after looking) — the honest verdict becomes "test underpowered, cannot conclude." (Watch for this whenever the baseline is already high and errors live in a thin tail.)
+
 ### Phase 2 — Define metric (before any run)
 
 **One primary metric. Maybe two secondaries.** More metrics = more knobs to cherry-pick.
@@ -97,6 +103,8 @@ The metric should:
 2. **Be computable per-row, not just aggregate** — per-row diffs are where signal lives
 3. **Have a known baseline value** before the experiment starts (compute baseline-on-dev first, write it down)
 4. **Have a meaningful effect-size threshold** ("≥5pp absolute" or "≥10% relative") — pre-registered, not chosen after
+
+**Before reaching for an LLM judge, ask: can scoring be made deterministic?** If ground truth is exact — generated from a known source, or human-labeled against a closed answer set — score by equality / set-membership / regex, not by judge. This **deletes the entire judge-bias, rubric-drift, and cross-judge-check surface** below in one move, and makes runs perfectly reproducible (variance from the judge → 0). Reach for an LLM judge only when the output is genuinely open-ended (free text, design quality) and no deterministic proxy exists.
 
 If the metric requires LLM-judge: define the rubric BEFORE seeing arm output. Otherwise the rubric drifts to favor whichever arm reads better.
 
@@ -126,6 +134,7 @@ Run all arms (baseline + N variants) against the same dev set. Same inputs, same
 - If two arms share an identical sub-call (e.g. same step-1 prompt under different step-2 strategies), their disagreement on those calls IS your variance estimate — log it.
 - **Effect must be ≥ 2× variance to count.** A 5pp gap with 4pp within-arm noise is noise.
 - Cross-iter score differences for the SAME unchanged arm are NOT a valid variance estimate (the prompt may have changed indirectly via cache state, judge mood, etc.). Run dedicated repeats.
+- **Deterministic systems can have variance = 0.** With temp-0 LLM calls + deterministic logic (and a deterministic metric, no judge), 3 repeats often come back byte-identical. Then "effect ≥ 2× variance" is trivially satisfied and **stops being the binding constraint — test-set size/power does.** Don't be lulled by a clean 0-variance baseline into thinking a small test is enough: size and *stratify* the test for the effect you want to detect (see Phase 1).
 
 **Cache-warmed cost.** Anthropic prompt cache writes cost ~1.25× input tokens; reads cost ~0.1×. The first call after a 5-min idle pays full write cost; calls 2-N (within 5min) pay read cost. **Single-row cost figures are misleading 5-15× both ways.** Use the steady-state average across the full N rows, not the first row.
 
@@ -178,6 +187,8 @@ If gate passes but dev signal is saturated → **lock and run Phase 5**; further
 **Each iteration changes ONE thing in the arm.** If iter3's prompt change adds "options + samples + amount-direction hint" all at once and the arm regresses, you can't tell which of the three caused it. Split into iter3a/3b/3c if you need 3 dimensions tested — but that's 3 iterations spent on one decision dimension and the sprint ends after it. Better: pick the highest-leverage single change, isolate, judge.
 
 **Falsification is a first-class outcome.** Each iteration begins with a written hypothesis ("more context → fewer wrong attaches"). After scoring, the hypothesis is either supported, neutral, or **falsified** (the change made things worse). Falsification ends the iteration and may end the sprint — log it, run the gate, then decide whether to start a new sprint with a different hypothesis or lock and run Phase 5. The pull "let me just try one more thing" inside the same sprint is the failure mode the sprint cap exists to block — finish the sprint, gate it, then decide.
+
+**A falsified iteration usually *localizes* the mechanism — read WHY it had zero effect.** "No change" is rarely "dead end"; it's often a pointer. In a real run, enriching the *LLM* matcher's context did nothing — because the failing rows were being decided *upstream by a deterministic heuristic* that never reached the LLM. That falsification didn't just kill iter1; it told iter2 exactly where to act (the heuristic), which then won. When a change has no effect, instrument the path: did the code you changed even execute on the failing rows?
 
 **Locking for Phase 5: lock the latest hypothesis-driven iter that passed the gate, NOT the highest-scoring iter.** If iter5's score is lower than iter3's but iter5 reflects the most recent gate-passed mechanism, lock iter5. Cherry-picking "iter3 had a higher number, lock that one for test" is multi-iteration multiple-comparison bias — best-of-N across iters is biased high by O(σ × √log N). Don't do it.
 
@@ -232,6 +243,8 @@ Autonomy without honesty is worse than vibes — at least vibes don't pretend to
 | "I changed 3 things in iter3 but they're all related" | If they were really 1 thing you'd write 1 line of prompt. 3 lines = 3 dimensions = confounded. Pick the highest-leverage one and isolate. |
 | "Aggregate score wins, ship it" | Aggregate winners that lose on a major slice are not winners. Always check per-tenant / per-class slice scores at Phase 5. |
 | "Aggregate wins, the failure-mode breakdown is just curiosity" | If arm A and arm B tie on aggregate but A shifts errors INTO the highest-severity category, A is strictly worse. Always read the per-category delta — that's where the substitution shows up. |
+| "Test came back +0pp, so the arm doesn't help" | "No effect" ≠ "no power." If the baseline already aced the test, check whether the test set even *contained* the failure-mode rows the arm fixes. A thin-tail effect needs the tail in the test — otherwise the verdict is "underpowered, can't conclude," not "no win." |
+| "It's synthetic with known labels, so the labels are perfect" | The *generator* can be buggy (collisions, overwrites, off-by-one). Run the label-noise audit on every row the baseline "fails" before believing any failure is the model's. |
 
 ## Red Flags — STOP
 
@@ -249,6 +262,8 @@ Autonomy without honesty is worse than vibes — at least vibes don't pretend to
 - About to "lock the iter with best dev score" instead of the latest hypothesis-driven iter
 - Aggregate ties but per-failure-mode delta shows arm shifted errors INTO higher-severity categories — that's a regression dressed as a tie
 - Severity-weighted ranking disagrees with unweighted ranking and you haven't surfaced this in the verdict
+- Baseline already high + errors in a thin tail, but the split wasn't stratified to put that tail in the test set (test is blind → underpowered)
+- Synthetic eval set and you haven't run the generator label-noise audit on the baseline's "failures"
 
 **All of these mean: STOP, return to Phase 5 with current arms, write the conclusion.**
 
@@ -291,6 +306,9 @@ End every experiment with a markdown doc that embeds the three charts above. Use
    - Pre-registered metric + threshold; no metric drift
    - Pilot run validated all metric fields populated before full dev run
    - Distribution audit: per-class / per-tenant counts match prod reality
+   - Split stratified so the test set contains the failure-mode rows (not just train/dev)
+   - For synthetic sets: generator label-noise audit run on the baseline's "failures"
+   - For "model vs logic" questions: a model-swap negative-control arm was included
    - Variance baseline measured (≥3 same-prompt trials OR identical sub-call across arms)
    - Effect ≥ 2× variance, not just ≥ threshold
    - Cross-judge sanity check on ≥5 rows with a 2nd-family judge
